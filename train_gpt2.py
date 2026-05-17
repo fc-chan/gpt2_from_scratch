@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 import torch.nn.functional as F
+from transformers import AutoModelForCausalLM
 
 class MLP(nn.Module):
     def __init__(self, config):
@@ -82,6 +83,25 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(self.config.n_embd, self.config.vocab_size, bias=False)
         self.lm_head.weight = self.transformer["wte"].weight
 
+    @classmethod
+    def from_pretrained(cls, model_type="gpt2"):
+        # Create an instance
+        model = GPT(config=GPT2Config())
+
+        # Load the pretrained model
+        pretrained_state_dict = AutoModelForCausalLM.from_pretrained(model_type).state_dict()
+        my_state_dict = model.state_dict()
+        transposed_key = ["attn.c_attn.weight", "attn.c_proj.weight", "mlp.c_fc.weight", "mlp.c_proj.weight"]
+
+        with torch.no_grad():
+            for k in my_state_dict:
+                if any(k.endswith(suffix) for suffix in transposed_key):
+                    my_state_dict[k].copy_(pretrained_state_dict[k].t())
+                else:
+                    my_state_dict[k].copy_(pretrained_state_dict[k])
+
+        return model
+
     def forward(self, idx): # Size of X = (B, T)
         B, T = idx.shape
         assert T <= self.config.block_size
@@ -99,3 +119,29 @@ class GPT(nn.Module):
         x = self.transformer["ln_f"](x)
         x = self.lm_head(x)
         return x
+
+# Generating Process
+import tiktoken
+
+tokenizer = tiktoken.get_encoding("gpt2")
+model = GPT.from_pretrained("gpt2")
+model.eval()
+
+max_length = 30
+num_generate = 5
+
+prompt = "Hello, I'm"
+idx = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0)
+idx = idx.repeat(num_generate, 1)
+
+with torch.no_grad():
+    for _ in range(max_length):
+        result = model(idx)
+        logits = F.softmax(result, dim=-1)
+        logits = logits[:, -1, :]
+        next_token = torch.multinomial(logits, num_samples=1, replacement=True)
+        idx = torch.cat((idx, next_token), dim=1)
+
+for result in idx:
+    print(tokenizer.decode(result.tolist()))
+    print("-----------------------------------------------")
