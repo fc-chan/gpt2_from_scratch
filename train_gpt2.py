@@ -1,3 +1,5 @@
+import platform
+
 import torch
 import tiktoken
 import math
@@ -36,7 +38,7 @@ class DataLoader():
 # Training Process
 data_loader = DataLoader()
 model = GPT(config=GPT2Config()).to(device)
-if device == "cuda":
+if device == "cuda" and platform.system() == "Linux":
     model = torch.compile(model)
 
 total_batch_size = 16384
