@@ -1,3 +1,4 @@
+import math
 import time
 from dataclasses import dataclass
 import torch
@@ -121,6 +122,15 @@ class GPT(nn.Module):
 
         return model
 
+    def configure_optimizers(self, weight_decay=0.1, learning_rate=3e-4):
+        require_dacay_parapmeters = [p for p in self.parameters() if p.ndim >= 2]
+        no_decay_parameters = [p for p in self.parameters() if p.ndim != 2]
+        optimizer = torch.optim.AdamW([
+            {'params': require_dacay_parapmeters, 'weight_decay': weight_decay},
+            {'params': no_decay_parameters, 'weight_decay': 0.0}
+        ], lr=learning_rate, betas=(0.9, 0.95))
+        return optimizer
+
     def forward(self, idx, targets=None): # Size of X = (B, T)
         B, T = idx.shape
         assert T <= self.config.block_size
@@ -175,33 +185,67 @@ class DataLoader():
 # Training Process
 data_loader = DataLoader()
 model = GPT(config=GPT2Config()).to(device)
+model = torch.compile(model)
 
+total_batch_size = 16384
 batch_size = 8
 time_span = 256
+
+assert total_batch_size % (batch_size * time_span) == 0
+gradient_accumulation_steps = total_batch_size // (batch_size * time_span)
+print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
 
 num_epochs = 10
 num_iterations = num_epochs * (len(data_loader.data) // (batch_size * time_span))
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+max_lr = 6e-4
+min_lr = max_lr * 0.1
+warmup_steps = 5
+max_steps = 50
+
+def get_lr(it): # it is from 0 to num_iterations - 1
+    if it < warmup_steps:
+        return max_lr * (it + 1) / warmup_steps
+
+    if it > max_steps:
+        return min_lr
+
+    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
+    coeff = 0.5 * (1 + math.cos(math.pi * decay_ratio))
+    return min_lr + coeff * (max_lr - min_lr)
+
+optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=3e-4)
 model.train()
 for i in range(50):
     torch.mps.synchronize()
     time_start = time.time()
-
-    x, y = data_loader.next_batch(batch_size, time_span)
-    x, y = x.to(device), y.to(device)
+    loss_accumulated = 0.0
     optimizer.zero_grad()
 
-    with torch.autocast(device_type="mps", dtype=torch.bfloat16):
-        logits, loss = model(x, y)
+    for micro_step in range(gradient_accumulation_steps):
+        x, y = data_loader.next_batch(batch_size, time_span)
+        x, y = x.to(device), y.to(device)
 
-    loss.backward()
+
+        with torch.autocast(device_type="mps", dtype=torch.bfloat16):
+            logits, loss = model(x, y)
+
+        loss = loss / gradient_accumulation_steps
+        loss_accumulated += loss.detach()
+        loss.backward()
+
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+
+    lr = get_lr(i)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
     optimizer.step()
 
     torch.mps.synchronize()
     time_end = time.time()
 
-    print(f"At {i + 1} training step, the loss is {loss.item()}. Time taken for this step is {time_end - time_start:.4f} seconds. Token per second: {(batch_size * time_span) / (time_end - time_start):.2f}.")
+    print(f"At {i + 1} training step | The loss is {loss_accumulated.item():.6f} | Time taken for this step is {time_end - time_start:.4f} seconds | Token per second: {(gradient_accumulation_steps * batch_size * time_span) / (time_end - time_start):.2f} | Norm: {norm:.2f} | lr: {lr:.6f}")
 """
 # Generating Process
 
