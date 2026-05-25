@@ -1,12 +1,16 @@
 import tiktoken
 import torch
 import torch.nn.functional as F
-from train_gpt2 import GPT, device
-# Generating Process
-
+from model import GPT
 tokenizer = tiktoken.get_encoding("gpt2")
 model = GPT.from_pretrained("gpt2")
 model.eval()
+# Autodetect of the device
+device = "cpu"
+if torch.cuda.is_available():
+    device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
 model.to(device)
 
 max_length = 30

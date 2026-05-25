@@ -14,7 +14,7 @@ elif torch.backends.mps.is_available():
     device = "mps"
 print(f"Using {device} device")
 if device == "cuda":
-    torch.set_float32_matmul_precision("high")
+    torch.backends.cudnn.conv.fp32_precision = 'tf32'
 
 class DataLoader():
     def __init__(self):
