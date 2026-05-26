@@ -119,7 +119,12 @@ class GPT(nn.Module):
                         my_state_dict[k].copy_(pretrained_state_dict[k])
         else:
             pretrained_state_dict = torch.load(url, map_location="cpu")
-            model.load_state_dict(pretrained_state_dict)
+            # Remove the prefix from torch.comiple
+            cleaned_state_dict = {
+                k.replace("_orig_mod.", ""): v 
+                for k, v in pretrained_state_dict.items()
+            }
+            model.load_state_dict(cleaned_state_dict)
         return model
 
     def configure_optimizers(self, weight_decay=0.1, learning_rate=3e-4):

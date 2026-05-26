@@ -15,7 +15,7 @@ elif torch.backends.mps.is_available():
     device = "mps"
 print(f"Using {device} device")
 if device == "cuda":
-    torch.backends.cudnn.conv.fp32_precision = 'tf32'
+    torch.set_float32_matmul_precision("high")
 
 class DataLoader():
     def __init__(self):
@@ -50,13 +50,13 @@ assert total_batch_size % (batch_size * time_span) == 0
 gradient_accumulation_steps = total_batch_size // (batch_size * time_span)
 print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
 
-num_epochs = 10
-num_iterations = num_epochs * (len(data_loader.data) // (batch_size * time_span))
+num_epochs = 20
+num_iterations = num_epochs * (len(data_loader.data) // total_batch_size)
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
-warmup_steps = 5
-max_steps = 50
+warmup_steps = num_iterations // 10
+max_steps = num_iterations
 
 def get_lr(it): # it is from 0 to num_iterations - 1
     if it < warmup_steps:
@@ -72,7 +72,7 @@ def get_lr(it): # it is from 0 to num_iterations - 1
 optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=3e-4)
 model.train()
 loss_accumulated_list = []
-for i in range(50):
+for i in range(num_iterations):
     if device == "mps":
         torch.mps.synchronize()
     elif device == "cuda":
