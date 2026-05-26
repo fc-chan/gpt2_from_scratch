@@ -12,3 +12,8 @@ venv/
 
 # Mac
 .DS_Store
+
+# Logs and Output
+*.txt
+*.png
+trained_model/

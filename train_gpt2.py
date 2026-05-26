@@ -4,6 +4,7 @@ import torch
 import tiktoken
 import math
 import time
+import matplotlib.pyplot as plt
 from model import GPT, GPT2Config
 
 # Autodetect of the device
@@ -70,6 +71,7 @@ def get_lr(it): # it is from 0 to num_iterations - 1
 
 optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=3e-4)
 model.train()
+loss_accumulated_list = []
 for i in range(50):
     if device == "mps":
         torch.mps.synchronize()
@@ -105,4 +107,23 @@ for i in range(50):
         torch.cuda.synchronize()
     time_end = time.time()
 
-    print(f"At {i + 1} training step | The loss is {loss_accumulated.item():.6f} | Time taken for this step is {time_end - time_start:.4f} seconds | Token per second: {(gradient_accumulation_steps * batch_size * time_span) / (time_end - time_start):.2f} | Norm: {norm:.2f} | lr: {lr:.6f}")
+    log_directory = "log.txt"
+    message = f"At {i + 1} training step | The loss is {loss_accumulated.item():.6f} | Time taken for this step is {time_end - time_start:.4f} seconds | Token per second: {(gradient_accumulation_steps * batch_size * time_span) / (time_end - time_start):.2f} | Norm: {norm:.2f} | lr: {lr:.6f}\n"
+    print(message)
+    with open(log_directory, "a") as f:
+        f.write(message)
+
+    loss_accumulated_list.append(loss_accumulated.item())
+
+    # Save the model every 1000 steps
+    if (i + 1) % 1000 == 0:
+        torch.save(model.state_dict(), f"./trained_model/model_step_{i + 1}.pth")
+
+torch.save(model.state_dict(), f"./trained_model/model_final.pth")
+
+# Plot the training loss
+plt.plot(loss_accumulated_list)
+plt.xlabel("Training Step")
+plt.ylabel("Loss")
+plt.title("Training Loss")
+plt.savefig("training_loss.png")

@@ -101,22 +101,25 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
 
     @classmethod
-    def from_pretrained(cls, model_type="gpt2"):
+    def from_pretrained(cls, url=None, model_type="gpt2"):
         # Create an instance
         model = GPT(config=GPT2Config())
+        my_state_dict = model.state_dict()
 
         # Load the pretrained model
-        pretrained_state_dict = AutoModelForCausalLM.from_pretrained(model_type).state_dict()
-        my_state_dict = model.state_dict()
-        transposed_key = ["attn.c_attn.weight", "attn.c_proj.weight", "mlp.c_fc.weight", "mlp.c_proj.weight"]
+        if url is None:
+            pretrained_state_dict = AutoModelForCausalLM.from_pretrained(model_type).state_dict()
+            transposed_key = ["attn.c_attn.weight", "attn.c_proj.weight", "mlp.c_fc.weight", "mlp.c_proj.weight"]
 
-        with torch.no_grad():
-            for k in my_state_dict:
-                if any(k.endswith(suffix) for suffix in transposed_key):
-                    my_state_dict[k].copy_(pretrained_state_dict[k].t())
-                else:
-                    my_state_dict[k].copy_(pretrained_state_dict[k])
-
+            with torch.no_grad():
+                for k in my_state_dict:
+                    if any(k.endswith(suffix) for suffix in transposed_key):
+                        my_state_dict[k].copy_(pretrained_state_dict[k].t())
+                    else:
+                        my_state_dict[k].copy_(pretrained_state_dict[k])
+        else:
+            pretrained_state_dict = torch.load(url, map_location="cpu")
+            model.load_state_dict(pretrained_state_dict)
         return model
 
     def configure_optimizers(self, weight_decay=0.1, learning_rate=3e-4):
