@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 from model import GPT
 tokenizer = tiktoken.get_encoding("gpt2")
-model = GPT.from_pretrained(url="./save_process/tinyShakespeare/model_final.pth", model_type=None)
+model = GPT.from_pretrained(model_type=None)
 
 model.eval()
 # Autodetect of the device

@@ -26,8 +26,9 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         self.c_proj.SCALING_INIT = True
 
-    def forward(self, x): # x.shape = (B, T, C)
+    def forward(self, x, past_kv=None): # x.shape = (B, T, C)
         B, T, C = x.shape
+        # Without using KV Cache
         qkv = self.c_attn(x) #(B, T, 3C)
         q,k,v = qkv.split(self.config.n_embd, 2) # (B, T, C) * 3
 
@@ -35,15 +36,26 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.config.n_head, C // self.config.n_head).transpose(1, 2)
         v = v.view(B, T, self.config.n_head, C // self.config.n_head).transpose(1, 2)
 
+        is_causal = True
+        if past_kv is not None:
+            past_k, past_v = past_kv
+            k = torch.cat((past_k, k), dim=2)
+            v = torch.cat((past_v, v), dim=2)
+            is_causal = False
+
         # attention_score = (q @ k.transpose(-2, -1)) / (C // self.config.n_head) ** 0.5
         # mask = torch.tril(torch.ones(T, T, device=x.device))
         # attention_score = attention_score.masked_fill(mask == 0, float("-inf"))
         # x = F.softmax(attention_score, dim=-1) @ v # (B, n_head, T, C / n_head)
-        x = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+
+
+        x = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+
         x = x.transpose(1, 2).contiguous().view(B, T, C)
 
         x = self.c_proj(x)
-        return x
+
+        return x, (k, v)
 
 class Block(nn.Module):
     def __init__(self, config):
@@ -53,14 +65,14 @@ class Block(nn.Module):
         self.ln_2 = nn.LayerNorm(normalized_shape=config.n_embd, bias=True)
         self.mlp = MLP(config)
 
-    def forward(self, x):
+    def forward(self, x, past_kv=None):
         output = self.ln_1(x)
-        output = self.attn(output)
+        output, (k, v) = self.attn(output, past_kv)
         x = output + x
         output = self.ln_2(x)
         output = self.mlp(output)
         x = output + x
-        return x
+        return x, (k, v)
 
 @dataclass
 class GPT2Config:
@@ -136,18 +148,22 @@ class GPT(nn.Module):
         ], lr=learning_rate, betas=(0.9, 0.95))
         return optimizer
 
-    def forward(self, idx, targets=None): # Size of X = (B, T)
+    def forward(self, idx, targets=None, past_kvs=None, use_cache=False): # Size of X = (B, T)
         B, T = idx.shape
         assert T <= self.config.block_size
 
         # Token embedding
         token_embeddings = self.transformer["wte"](idx)  # (B, T, n_embd)
-        position_embeddings = self.transformer["wpe"](torch.arange(T, device=idx.device))
+        past_length = past_kvs[0][0].shape[2] if past_kvs is not None else 0
+        position_embeddings = self.transformer["wpe"](torch.arange(past_length, past_length + T, device=idx.device))
         x = token_embeddings + position_embeddings
 
         # Transformer blocks
-        for block in self.transformer["h"]:
-            x = block(x)
+        new_kvs = []
+        for i, block in enumerate(self.transformer["h"]):
+            layer_past = past_kvs[i] if past_kvs is not None else None
+            x, new_kv = block(x, layer_past)
+            new_kvs.append(new_kv)
 
         # Output
         x = self.transformer["ln_f"](x)
@@ -157,5 +173,8 @@ class GPT(nn.Module):
         if targets is not None:
             loss = F.cross_entropy(x.view(-1, x.shape[-1]), targets.view(-1))
             return x, loss
+
+        if use_cache:
+            return x, new_kvs
 
         return x
