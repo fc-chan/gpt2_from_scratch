@@ -49,6 +49,33 @@ The model has never seen modern English in training and defaults to Shakespeare-
 
 Full generation samples: [`samples/`](./samples/)
 
+## KV Cache
+
+Autoregressive generation without caching recomputes the full forward pass over the entire sequence at every step — including the keys and values of all previous tokens, which never change. This makes naive generation **O(N²)** in sequence length.
+
+I implemented KV caching, which stores each layer's keys and values and feeds only the newest token through the model at each decode step (**O(N)** per-token compute). The implementation handles two phases:
+
+- **Prefill**: the full prompt is processed once with a causal mask, populating the initial cache.
+- **Decode**: each subsequent step feeds a single token with `is_causal=False` (the query attends to all cached positions), appending the new key/value to the cache. Position embeddings are offset by the cached sequence length.
+
+Correctness is verified in [`test_kv_cache.py`](./test_kv_cache.py): under greedy decoding, the cached and naive implementations produce token-for-token identical outputs.
+
+### Benchmark
+
+Latency comparison on GPT-2 124M, generating from a 2-token prompt (Apple M-series, MPS):
+
+![KV Cache Benchmark](./kv_cache_comparison.png)
+
+| Generated tokens | Naive (ms) | KV Cache (ms) | Speedup |
+|---|---|---|---|
+| 50  | 434.9     | 225.3   | 1.9x  |
+| 100 | 1,202.7   | 456.0   | 2.6x  |
+| 200 | 3,664.7   | 944.9   | 3.9x  |
+| 400 | 15,463.7  | 2,385.4 | 6.5x  |
+| 800 | 177,368.1 | 4,815.4 | 36.8x |
+
+Notably, the speedup grows with sequence length (1.9× at 50 tokens → 36.8× at 800). Doubling the output from 400 to 800 tokens increases naive latency by ~11× while KV cache scales roughly linearly — a direct empirical signature of the O(N²) vs O(N) difference. This quadratic blowup is precisely why KV cache is essential for long-context serving, and why managing the cache itself (eviction, quantization, offloading) is an active research area.
+
 ## Architecture Notes
 
 This implementation follows the GPT-2 paper and Karpathy's tutorial, with a few details worth highlighting:
